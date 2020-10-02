@@ -11,7 +11,7 @@ from warnings import warn
 from .inference import BootstrapInference
 from .utilities import tensordot, ndim, reshape, shape, parse_final_model_params, inverse_onehot
 from .inference import StatsModelsInference, StatsModelsInferenceDiscrete, LinearModelFinalInference,\
-    LinearModelFinalInferenceDiscrete, InferenceResults
+    LinearModelFinalInferenceDiscrete, NormalInferenceResults
 
 
 class BaseCateEstimator(metaclass=abc.ABCMeta):
@@ -392,8 +392,11 @@ class LinearCateEstimator(BaseCateEstimator):
         if X is None:
             pred = np.repeat(pred, shape(T)[0], axis=0)
             pred_stderr = np.repeat(pred_stderr, shape(T)[0], axis=0)
-        return InferenceResults(d_t=cme_inf.d_t, d_y=cme_inf.d_y, pred=pred,
-                                pred_stderr=pred_stderr, inf_type='effect', pred_dist=None, fname_transformer=None)
+        # TODO: It seems wrong to return inference results based on a normal approximation
+        #       even in the case where const_marginal_effect_inference was actually generated
+        #       using bootstrap
+        return NormalInferenceResults(d_t=cme_inf.d_t, d_y=cme_inf.d_y, pred=pred,
+                                      pred_stderr=pred_stderr, inf_type='effect', fname_transformer=None)
     marginal_effect_inference.__doc__ = BaseCateEstimator.marginal_effect_inference.__doc__
 
     @BaseCateEstimator._defer_to_inference
