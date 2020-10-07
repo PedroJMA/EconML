@@ -48,7 +48,7 @@ class BootstrapEstimator:
         that should be preferred (meaning this wrapper will compute the mean of it).
         This option only affects behavior if `compute_means` is set to ``True``.
 
-    bootstrap_type: 'percentile', 'pivot', or 'normal', default 'percentile'
+    bootstrap_type: 'percentile', 'pivot', or 'normal', default 'pivot'
         Bootstrap method used to compute results.  'percentile' will result in using the empiracal CDF of
         the replicated computations of the statistics.   'pivot' will also use the replicates but create a pivot
         interval that also relies on the estimate over the entire dataset.  'normal' will instead compute an interval
@@ -56,7 +56,7 @@ class BootstrapEstimator:
     """
 
     def __init__(self, wrapped, n_bootstrap_samples=1000, n_jobs=None, compute_means=True, prefer_wrapped=False,
-                 bootstrap_type='percentile'):
+                 bootstrap_type='pivot'):
         self._instances = [clone(wrapped, safe=False) for _ in range(n_bootstrap_samples)]
         self._n_bootstrap_samples = n_bootstrap_samples
         self._n_jobs = n_jobs
@@ -162,8 +162,7 @@ class BootstrapEstimator:
                 def pivot_bootstrap(arr, est):
                     return 2 * est - np.percentile(arr, upper, axis=0), 2 * est - np.percentile(arr, lower, axis=0)
 
-                def normal_bootstrap(arr, _):
-                    est = np.mean(arr, axis=0)
+                def normal_bootstrap(arr, est):
                     std = np.std(arr, axis=0)
                     return est - norm.ppf(upper / 100) * std, est - norm.ppf(lower / 100) * std
 

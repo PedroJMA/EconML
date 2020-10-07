@@ -32,56 +32,7 @@ class Inference(metaclass=abc.ABCMeta):
         pass
 
 
-class BootstrapInference(Inference):
-    """
-    Inference instance to perform bootstrapping.
-
-    This class can be used for inference with any CATE estimator.
-
-    Parameters
-    ----------
-    n_bootstrap_samples : int, optional (default 100)
-        How many draws to perform.
-
-    n_jobs: int, optional (default -1)
-        The maximum number of concurrently running jobs, as in joblib.Parallel.
-
-    bootstrap_type: 'percentile', 'pivot', or 'normal', default 'percentile'
-        Bootstrap method used to compute results.
-        'percentile' will result in using the empiracal CDF of the replicated computations of the statistics.
-        'pivot' will also use the replicates but create a pivot interval that also relies on the estimate
-        over the entire dataset.
-        'normal' will instead compute a pivot interval assuming the replicates are normally distributed.
-    """
-
-    def __init__(self, n_bootstrap_samples=100, n_jobs=-1, bootstrap_type='percentile'):
-        self._n_bootstrap_samples = n_bootstrap_samples
-        self._n_jobs = n_jobs
-        self._bootstrap_type = bootstrap_type
-
-    def fit(self, estimator, *args, **kwargs):
-        discrete_treatment = estimator._discrete_treatment if hasattr(estimator, '_discrete_treatment') else False
-        est = BootstrapEstimator(estimator, self._n_bootstrap_samples, self._n_jobs, compute_means=False,
-                                 bootstrap_type=self._bootstrap_type)
-        est.fit(*args, **kwargs)
-        self._est = est
-        self._d_t = estimator._d_t
-        self._d_y = estimator._d_y
-        self.d_t = self._d_t[0] if self._d_t else 1
-        self.d_y = self._d_y[0] if self._d_y else 1
-
-    def __getattr__(self, name):
-        if name.startswith('__'):
-            raise AttributeError()
-
-        m = getattr(self._est, name)
-        if name.endswith('_interval'):  # convert alpha to lower/upper
-            def wrapped(*args, alpha=0.1, **kwargs):
-                return m(*args, lower=100 * alpha / 2, upper=100 * (1 - alpha / 2), **kwargs)
-            return wrapped
-        else:
-            return m
-
+class _SummaryMixin:
     def summary(self, alpha=0.1, value=0, decimals=3, feat_name=None):
         smry = Summary()
         try:
@@ -109,6 +60,56 @@ class BootstrapInference(Inference):
             print("Intercept Results: ", str(e))
         if len(smry.tables) > 0:
             return smry
+
+
+class BootstrapInference(_SummaryMixin, Inference):
+    """
+    Inference instance to perform bootstrapping.
+
+    This class can be used for inference with any CATE estimator.
+
+    Parameters
+    ----------
+    n_bootstrap_samples : int, optional (default 100)
+        How many draws to perform.
+
+    n_jobs: int, optional (default -1)
+        The maximum number of concurrently running jobs, as in joblib.Parallel.
+
+    bootstrap_type: 'percentile', 'pivot', or 'normal', default 'pivot'
+        Bootstrap method used to compute results.
+        'percentile' will result in using the empiracal CDF of the replicated computations of the statistics.
+        'pivot' will also use the replicates but create a pivot interval that also relies on the estimate
+        over the entire dataset.
+        'normal' will instead compute a pivot interval assuming the replicates are normally distributed.
+    """
+
+    def __init__(self, n_bootstrap_samples=100, n_jobs=-1, bootstrap_type='pivot'):
+        self._n_bootstrap_samples = n_bootstrap_samples
+        self._n_jobs = n_jobs
+        self._bootstrap_type = bootstrap_type
+
+    def fit(self, estimator, *args, **kwargs):
+        est = BootstrapEstimator(estimator, self._n_bootstrap_samples, self._n_jobs, compute_means=False,
+                                 bootstrap_type=self._bootstrap_type)
+        est.fit(*args, **kwargs)
+        self._est = est
+        self._d_t = estimator._d_t
+        self._d_y = estimator._d_y
+        self.d_t = self._d_t[0] if self._d_t else 1
+        self.d_y = self._d_y[0] if self._d_y else 1
+
+    def __getattr__(self, name):
+        if name.startswith('__'):
+            raise AttributeError()
+
+        m = getattr(self._est, name)
+        if name.endswith('_interval'):  # convert alpha to lower/upper
+            def wrapped(*args, alpha=0.1, **kwargs):
+                return m(*args, lower=100 * alpha / 2, upper=100 * (1 - alpha / 2), **kwargs)
+            return wrapped
+        else:
+            return m
 
 
 class GenericModelFinalInference(Inference):
@@ -215,7 +216,7 @@ class GenericSingleTreatmentModelFinalInference(GenericModelFinalInference):
                                       pred_stderr=e_stderr, inf_type='effect', fname_transformer=None)
 
 
-class LinearModelFinalInference(GenericModelFinalInference):
+class LinearModelFinalInference(_SummaryMixin, GenericModelFinalInference):
     """
     Inference based on predict_interval of the model_final model. Assumes that estimator
     class has a model_final method and that model is linear. Thus, the predict(cross_product(X, T1 - T0)) gives
@@ -317,34 +318,6 @@ class LinearModelFinalInference(GenericModelFinalInference):
                                                     self.fit_cate_intercept)[1]
         return NormalInferenceResults(d_t=self.d_t, d_y=self.d_y, pred=intercept, pred_stderr=intercept_stderr,
                                       inf_type='intercept', fname_transformer=None)
-
-    def summary(self, alpha=0.1, value=0, decimals=3, feat_name=None):
-        smry = Summary()
-        try:
-            coef_table = self.coef__inference().summary_frame(alpha=alpha,
-                                                              value=value, decimals=decimals, feat_name=feat_name)
-            coef_array = coef_table.values
-            coef_headers = [i + '\n' +
-                            j for (i, j) in coef_table.columns] if self.d_t > 1 else coef_table.columns.tolist()
-            coef_stubs = [i + ' | ' + j for (i, j) in coef_table.index] if self.d_y > 1 else coef_table.index.tolist()
-            coef_title = 'Coefficient Results'
-            smry.add_table(coef_array, coef_headers, coef_stubs, coef_title)
-        except Exception as e:
-            print("Coefficient Results: ", str(e))
-        try:
-            intercept_table = self.intercept__inference().summary_frame(alpha=alpha,
-                                                                        value=value, decimals=decimals, feat_name=None)
-            intercept_array = intercept_table.values
-            intercept_headers = [i + '\n' + j for (i, j)
-                                 in intercept_table.columns] if self.d_t > 1 else intercept_table.columns.tolist()
-            intercept_stubs = [i + ' | ' + j for (i, j)
-                               in intercept_table.index] if self.d_y > 1 else intercept_table.index.tolist()
-            intercept_title = 'Intercept Results'
-            smry.add_table(intercept_array, intercept_headers, intercept_stubs, intercept_title)
-        except Exception as e:
-            print("Intercept Results: ", str(e))
-        if len(smry.tables) > 0:
-            return smry
 
 
 class StatsModelsInference(LinearModelFinalInference):
